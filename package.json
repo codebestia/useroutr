@@ -3,11 +3,12 @@
   "private": true,
   "version": "0.1.0",
   "workspaces": [
-    "api/*",
+    "apps/*",
     "packages/*"
   ],
   "scripts": {
     "bootstrap": "npm install",
+    "dev": "npm run dev --workspace=www",
     "start:api": "npm --workspace=api run start:dev"
   },
   "devDependencies": {

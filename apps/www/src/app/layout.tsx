@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { Syne, Newsreader, JetBrains_Mono } from "next/font/google";
 import { cn } from "@/lib/utils";
+import Navbar from "@/components/navbar";
 
 const syne = Syne({
   subsets: ["latin"],
