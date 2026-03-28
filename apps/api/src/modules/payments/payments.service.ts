@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, ConflictException, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentStatus, Payment } from '../../generated/prisma';
 import { EventsGateway } from '../events/events/events.gateway';
@@ -7,10 +7,11 @@ import { WebhooksService } from '../webhooks/webhooks.service';
 import { StellarService } from '../stellar/stellar.service';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { PaymentFiltersDto } from './dto/payment-filters.dto';
+import { PaymentResponseDto } from './dto/payment-response.dto';
 import * as crypto from 'crypto';
 
 @Injectable()
-export class PaymentsService {
+export class PaymentsService implements OnModuleInit {
   private readonly logger = new Logger(PaymentsService.name);
   private readonly CHECKOUT_URL = process.env.CHECKOUT_URL || 'https://checkout.useroutr.io';
 
@@ -22,8 +23,39 @@ export class PaymentsService {
     private readonly stellarService: StellarService,
   ) {}
 
-  async create(merchantId: string, dto: CreatePaymentDto): Promise<any> {
+  async onModuleInit() {
+    this.logger.log('PaymentsService initialized. Starting expiry monitor.');
+    // Simple interval-based expiry check as fallback for missing Scheduler
+    setInterval(() => this.processExpiredPending(), 60_000);
+  }
+
+  async processExpiredPending() {
+    try {
+        const expired = await this.findExpiredPending();
+        if (expired.length > 0) {
+            this.logger.log(`Found ${expired.length} expired pending payments. Marking as EXPIRED.`);
+            for (const p of expired) {
+                await this.updateStatus(p.id, PaymentStatus.EXPIRED);
+            }
+        }
+    } catch (err) {
+        this.logger.error(`Failed to process expired payments: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async create(merchantId: string, dto: CreatePaymentDto, idempotencyKey?: string): Promise<PaymentResponseDto> {
     this.logger.log(`Creating payment for merchant ${merchantId} with quote ${dto.quoteId}`);
+
+    // Idempotency check 
+    if (idempotencyKey) {
+        const existing = await this.prisma.payment.findUnique({
+            where: { idempotencyKey },
+        });
+        if (existing) {
+            this.logger.log(`Returning existing payment for idempotency key: ${idempotencyKey}`);
+            return this.formatPaymentResponse(existing);
+        }
+    }
 
     // Fetch merchant to get settlement preferences
     const merchant = await this.prisma.merchant.findUnique({
@@ -37,6 +69,7 @@ export class PaymentsService {
     // 2. Generate HTLC secret + hashlock
     const secret = crypto.randomBytes(32);
     const hashlock = crypto.createHash('sha256').update(secret).digest('hex');
+    const secretHex = secret.toString('hex');
 
     // 3. Create payment record (status: PENDING)
     const payment = await this.prisma.payment.create({
@@ -50,13 +83,19 @@ export class PaymentsService {
         destChain: quote.toChain,
         destAsset: quote.toAsset,
         destAmount: quote.toAmount,
-        destAddress: merchant.settlementAddress || 'system_vault', // fallback
+        destAddress: merchant.settlementAddress || 'system_vault',
         hashlock,
+        htlcSecret: secretHex,
+        idempotencyKey,
         metadata: (dto.metadata as any) || {},
       },
     });
 
-    // 4. Return payment with checkout URL
+    // 4. Return payment
+    return this.formatPaymentResponse(payment);
+  }
+
+  private formatPaymentResponse(payment: Payment): PaymentResponseDto {
     return {
       id: payment.id,
       status: payment.status.toLowerCase(),
@@ -65,10 +104,9 @@ export class PaymentsService {
       currency: payment.sourceAsset,
       settlement_amount: payment.destAmount.toString(),
       settlement_asset: payment.destAsset,
-      customer: dto.customer,
       metadata: payment.metadata,
       created_at: payment.createdAt,
-      expires_at: new Date(payment.createdAt.getTime() + 30 * 60 * 1000), // 30 min expiry
+      expires_at: new Date(payment.createdAt.getTime() + 30 * 60 * 1000),
     };
   }
 
@@ -110,11 +148,29 @@ export class PaymentsService {
   }
 
   async getByMerchant(merchantId: string, filters: PaymentFiltersDto) {
-    const { page = 1, limit = 10, sortBy = 'createdAt', sortOrder = 'desc', status, search } = filters;
+    const { 
+        page = 1, limit = 10, sortBy = 'createdAt', sortOrder = 'desc', 
+        status, search, from, to, currency, minAmount, maxAmount 
+    } = filters;
+    
     const skip = (Number(page) - 1) * Number(limit);
 
     const where: any = { merchantId };
     if (status) where.status = status;
+    if (currency) where.sourceAsset = currency;
+    
+    if (from || to) {
+        where.createdAt = {};
+        if (from) where.createdAt.gte = new Date(from);
+        if (to) where.createdAt.lte = new Date(to);
+    }
+    
+    if (minAmount || maxAmount) {
+        where.sourceAmount = {};
+        if (minAmount) where.sourceAmount.gte = minAmount;
+        if (maxAmount) where.sourceAmount.lte = maxAmount;
+    }
+
     if (search) {
       where.OR = [
         { id: { contains: search, mode: 'insensitive' } },
@@ -173,7 +229,6 @@ export class PaymentsService {
       sourceLockId,
     });
 
-    // Trigger Stellar lock
     await this.lockOnStellar(paymentId);
   }
 
@@ -185,7 +240,7 @@ export class PaymentsService {
             sender: 'vault_address',
             receiver: payment.destAddress,
             token: payment.destAsset,
-            amount: BigInt(Math.floor(Number(payment.destAmount))), // Simplified
+            amount: BigInt(Math.floor(Number(payment.destAmount))),
             hashlock: payment.hashlock!,
             timelock: Math.floor(Date.now() / 1000) + 3600,
         });
@@ -194,7 +249,8 @@ export class PaymentsService {
             stellarTxHash,
         });
     } catch (err) {
-        this.logger.error(`Stellar lock failed for payment ${paymentId}: ${err.message}`);
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.error(`Stellar lock failed for payment ${paymentId}: ${message}`);
         await this.updateStatus(paymentId, PaymentStatus.FAILED);
     }
   }
@@ -203,7 +259,20 @@ export class PaymentsService {
     await this.updateStatus(paymentId, PaymentStatus.COMPLETED);
   }
 
-  async initiateRefund(paymentId: string) {
+  async initiateRefund(paymentId: string): Promise<Payment> {
+    const payment = await this.getById(paymentId);
+    
+    const refundableStatuses = [
+        PaymentStatus.SOURCE_LOCKED, 
+        PaymentStatus.STELLAR_LOCKED, 
+        PaymentStatus.PROCESSING,
+        PaymentStatus.COMPLETED
+    ];
+
+    if (!refundableStatuses.includes(payment.status)) {
+        throw new ConflictException(`Payment in status ${payment.status} cannot be refunded`);
+    }
+
     return this.updateStatus(paymentId, PaymentStatus.REFUNDING);
   }
 

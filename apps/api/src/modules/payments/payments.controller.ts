@@ -1,11 +1,12 @@
 import { 
   Controller, Post, Get, Body, Param, UseGuards, 
   Query, Header, StreamableFile, Req, 
-  Logger 
+  Logger, ConflictException, Headers 
 } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { PaymentFiltersDto } from './dto/payment-filters.dto';
+import { PaymentResponseDto } from './dto/payment-response.dto';
 import { ApiKeyGuard } from '../../common/guards/api-key.guard';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CombinedAuthGuard } from '../../common/guards/combined-auth.guard';
@@ -18,10 +19,24 @@ export class PaymentsController {
 
   @Post('payments')
   @UseGuards(ApiKeyGuard)
-  async create(@Req() req: any, @Body() dto: CreatePaymentDto) {
-    // Assuming merchant is attached to request by ApiKeyGuard
-    const merchantId = req.merchant.id || req.user.merchantId;
-    return this.paymentsService.create(merchantId, dto);
+  async create(
+    @Req() req: any, 
+    @Body() dto: CreatePaymentDto,
+    @Headers('idempotency-key') idempotencyKey?: string
+  ): Promise<PaymentResponseDto> {
+    const merchantId = req.merchant?.id || req.user?.merchantId;
+    return this.paymentsService.create(merchantId, dto, idempotencyKey);
+  }
+
+  // 3. Move export above :id to avoid route conflict
+  @Get('payments/export')
+  @UseGuards(JwtAuthGuard)
+  @Header('Content-Type', 'text/csv')
+  @Header('Content-Disposition', 'attachment; filename="payments.csv"')
+  async export(@Req() req: any, @Query() filters: PaymentFiltersDto) {
+    const merchantId = req.user.merchantId || req.user.id;
+    const csvBuffer = await this.paymentsService.exportTransactions(merchantId, filters);
+    return new StreamableFile(csvBuffer);
   }
 
   @Get('payments/:id')
@@ -48,15 +63,5 @@ export class PaymentsController {
   @UseGuards(CombinedAuthGuard)
   async initiateRefund(@Body() body: { paymentId: string }) {
     return this.paymentsService.initiateRefund(body.paymentId);
-  }
-
-  @Get('payments/export')
-  @UseGuards(JwtAuthGuard)
-  @Header('Content-Type', 'text/csv')
-  @Header('Content-Disposition', 'attachment; filename="payments.csv"')
-  async export(@Req() req: any, @Query() filters: PaymentFiltersDto) {
-    const merchantId = req.user.merchantId || req.user.id;
-    const csvBuffer = await this.paymentsService.exportTransactions(merchantId, filters);
-    return new StreamableFile(csvBuffer);
   }
 }
