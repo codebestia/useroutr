@@ -1,6 +1,14 @@
 "use client";
 
-import { Modal, Button } from "@tavvio/ui";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  Button,
+} from "@tavvio/ui";
 import { Download } from "@phosphor-icons/react";
 import { useState, useRef } from "react";
 import { QRCodeSVG } from "qrcode.react";
@@ -21,7 +29,6 @@ export function QRCodeModal({ open, onOpenChange, url, linkName }: QRCodeModalPr
     try {
       if (!svgRef.current) return;
 
-      // Convert SVG to canvas
       const svgData = new XMLSerializer().serializeToString(svgRef.current);
       const svgBlob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
       const svgUrl = URL.createObjectURL(svgBlob);
@@ -34,11 +41,10 @@ export function QRCodeModal({ open, onOpenChange, url, linkName }: QRCodeModalPr
 
         canvas.width = 400;
         canvas.height = 400;
-        
-        // White background
+
         ctx.fillStyle = "#FFFFFF";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
+
         ctx.drawImage(img, 0, 0, 400, 400);
         URL.revokeObjectURL(svgUrl);
 
@@ -63,13 +69,31 @@ export function QRCodeModal({ open, onOpenChange, url, linkName }: QRCodeModalPr
   };
 
   return (
-    <Modal
-      open={open}
-      onOpenChange={onOpenChange}
-      title="QR Code"
-      description={linkName ? `Scan to pay: ${linkName}` : undefined}
-      footer={
-        <div className="flex justify-end gap-2">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>QR Code</DialogTitle>
+          {linkName && (
+            <DialogDescription>Scan to pay: {linkName}</DialogDescription>
+          )}
+        </DialogHeader>
+
+        <div className="flex flex-col items-center justify-center py-4">
+          <div className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">
+            <QRCodeSVG
+              value={url}
+              size={200}
+              level="H"
+              includeMargin={true}
+              ref={svgRef}
+            />
+          </div>
+          <p className="mt-4 text-center text-sm text-[var(--muted-foreground)]">
+            Scan this QR code to access the payment link
+          </p>
+        </div>
+
+        <DialogFooter>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Close
           </Button>
@@ -81,23 +105,8 @@ export function QRCodeModal({ open, onOpenChange, url, linkName }: QRCodeModalPr
             <Download size={16} />
             Download PNG
           </Button>
-        </div>
-      }
-    >
-      <div className="flex flex-col items-center justify-center py-4">
-        <div className="rounded-lg border border-[var(--border)] bg-white p-4 shadow-sm">
-          <QRCodeSVG
-            value={url}
-            size={200}
-            level="H"
-            includeMargin={true}
-            ref={svgRef}
-          />
-        </div>
-        <p className="mt-4 text-center text-sm text-[var(--muted-foreground)]">
-          Scan this QR code to access the payment link
-        </p>
-      </div>
-    </Modal>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

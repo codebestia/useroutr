@@ -1,7 +1,18 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { Card, CardContent, Button } from "@tavvio/ui";
+import {
+  Card,
+  CardHeader,
+  CardContent,
+  CardFooter,
+  Separator,
+  Button,
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+  TooltipProvider,
+} from "@tavvio/ui";
 import { QrCode, Trash } from "@phosphor-icons/react";
 import { formatCurrency } from "@/lib/utils";
 import { LinkStatusBadge } from "./LinkStatusBadge";
@@ -32,21 +43,18 @@ export function LinkCard({ link, onQRCode, onDeactivate }: LinkCardProps) {
   return (
     <Card
       className={cn(
-        "p-5 transition-all duration-200 hover:shadow-md",
+        "transition-all duration-200 hover:shadow-md",
         isExpired && "opacity-60",
         isDeactivated && "opacity-50"
       )}
     >
-      <CardContent className="space-y-4 p-0">
-        {/* Header: ID + Status */}
-        <div className="flex items-start justify-between">
-          <div className="space-y-1">
-            <p className="text-xs text-[var(--muted-foreground)]">{link.id}</p>
-          </div>
-          <LinkStatusBadge status={link.status} />
-        </div>
+      <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3">
+        <p className="truncate text-xs text-[var(--muted-foreground)]">{link.id}</p>
+        <LinkStatusBadge status={link.status} />
+      </CardHeader>
 
-        {/* Amount */}
+      <CardContent className="space-y-3">
+        {/* Amount + Type */}
         <div className="flex items-center justify-between">
           <span className="text-lg font-bold text-[var(--foreground)]">
             {link.amount
@@ -78,37 +86,48 @@ export function LinkCard({ link, onQRCode, onDeactivate }: LinkCardProps) {
             <span className="text-[var(--muted-foreground)]">No expiry</span>
           )}
         </div>
-
-        {/* Actions */}
-        <div className="flex items-center gap-2 pt-2">
-          <CopyButton
-            value={link.url}
-            feedbackText="Copied!"
-            className="flex-1"
-          />
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => onQRCode(link)}
-            className="flex-1"
-          >
-            <QrCode size={16} />
-            QR Code
-          </Button>
-          {canDeactivate && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => onDeactivate(link)}
-              className="text-[var(--red)] hover:bg-[var(--red)]/10 hover:text-[var(--red)]"
-            >
-              <Trash size={16} />
-            </Button>
-          )}
-        </div>
       </CardContent>
+
+      <Separator />
+
+      <CardFooter className="gap-2 pt-4">
+        <TooltipProvider>
+          <CopyButton value={link.url} feedbackText="Copied!" className="flex-1" />
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => onQRCode(link)}
+                className="flex-1"
+              >
+                <QrCode size={16} />
+                QR Code
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Generate QR code for this link</TooltipContent>
+          </Tooltip>
+
+          {canDeactivate && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onDeactivate(link)}
+                  className="text-[var(--red)] hover:bg-[var(--red)]/10 hover:text-[var(--red)]"
+                >
+                  <Trash size={16} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Deactivate this link</TooltipContent>
+            </Tooltip>
+          )}
+        </TooltipProvider>
+      </CardFooter>
     </Card>
   );
 }

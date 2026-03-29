@@ -17,7 +17,7 @@ interface PaymentLinksParams {
 export function usePaymentLinks(params: PaymentLinksParams = {}) {
   return useQuery<PaymentLinksResponse>({
     queryKey: ["payment-links", params],
-    queryFn: () => api.get("/payment-links", { params }),
+    queryFn: () => api.get("/payment-links", { params: params as Record<string, unknown> }),
   });
 }
 

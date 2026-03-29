@@ -1,7 +1,19 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { Button, Input, Select, EmptyState, Modal } from "@tavvio/ui";
+import { useState, useEffect } from "react";
+import {
+  Button,
+  Input,
+  Select,
+  EmptyState,
+  Skeleton,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@tavvio/ui";
 import { Plus, MagnifyingGlass, Link as LinkIcon } from "@phosphor-icons/react";
 import { useToast } from "@tavvio/ui";
 import { LinkCard } from "@/components/links/LinkCard";
@@ -33,6 +45,28 @@ function useDebounce<T>(value: T, delay: number): T {
   return debouncedValue;
 }
 
+function LinkCardSkeleton() {
+  return (
+    <div className="rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--card)] p-6 shadow-sm">
+      <div className="flex items-start justify-between">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="h-5 w-16 rounded-full" />
+      </div>
+      <Skeleton className="mt-4 h-7 w-24" />
+      <Skeleton className="mt-3 h-4 w-full" />
+      <div className="mt-4 flex items-center justify-between">
+        <Skeleton className="h-4 w-20" />
+        <Skeleton className="h-4 w-24" />
+      </div>
+      <div className="mt-4 flex gap-2 border-t border-[var(--border)] pt-4">
+        <Skeleton className="h-8 flex-1" />
+        <Skeleton className="h-8 flex-1" />
+        <Skeleton className="h-8 w-8" />
+      </div>
+    </div>
+  );
+}
+
 export default function PaymentLinksPage() {
   const { toast } = useToast();
   const [search, setSearch] = useState("");
@@ -59,8 +93,9 @@ export default function PaymentLinksPage() {
 
   useEffect(() => {
     // Subscribe to payment link payment events
-    const unsubscribe = subscribe("payment-link.payment", (data: { linkId: string; amount: number }) => {
-      toast(`Payment received: $${data.amount}`, "success");
+    const unsubscribe = subscribe("payment-link.payment", (...args: unknown[]) => {
+      const payload = args[0] as { linkId: string; amount: number };
+      toast(`Payment received: $${payload.amount}`, "success");
       refetch();
     });
 
@@ -105,10 +140,10 @@ export default function PaymentLinksPage() {
 
   const links = data?.data ?? [];
   const hasLinks = links.length > 0;
-  
+
   // Determine if filters are active
   const hasActiveFilters = debouncedSearch.length > 0 || statusFilter !== "all";
-  
+
   // Show empty state for "no links" vs "no results"
   const showNoResults = hasActiveFilters && !hasLinks;
   const showNoLinks = !hasActiveFilters && !hasLinks;
@@ -158,14 +193,7 @@ export default function PaymentLinksPage() {
       {isLoading ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => (
-            <div
-              key={i}
-              className="rounded-lg border border-border bg-card p-5 shadow-sm"
-            >
-              <div className="h-5 w-32 skeleton" />
-              <div className="mt-2 h-4 w-20 skeleton" />
-              <div className="mt-4 h-4 w-full skeleton" />
-            </div>
+            <LinkCardSkeleton key={i} />
           ))}
         </div>
       ) : hasLinks ? (
@@ -241,16 +269,33 @@ export default function PaymentLinksPage() {
         />
       )}
 
-      {/* Deactivate Confirmation Modal */}
-      <Modal
+      {/* Deactivate Confirmation Dialog */}
+      <Dialog
         open={!!linkToDeactivate}
         onOpenChange={(open) => {
           if (!open) setLinkToDeactivate(null);
         }}
-        title="Deactivate Link"
-        description="Are you sure you want to deactivate this payment link? No more payments will be accepted."
-        footer={
-          <div className="flex justify-end gap-2">
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Deactivate Link</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to deactivate this payment link? No more payments will be accepted.
+            </DialogDescription>
+          </DialogHeader>
+
+          {linkToDeactivate && (
+            <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--background)] p-4">
+              <p className="font-medium text-[var(--foreground)]">
+                {linkToDeactivate.description || linkToDeactivate.id}
+              </p>
+              <p className="mt-1 text-sm text-[var(--muted-foreground)]">
+                {linkToDeactivate.url}
+              </p>
+            </div>
+          )}
+
+          <DialogFooter>
             <Button
               type="button"
               variant="outline"
@@ -266,18 +311,9 @@ export default function PaymentLinksPage() {
             >
               Deactivate
             </Button>
-          </div>
-        }
-      >
-        {linkToDeactivate && (
-          <div className="rounded-lg border border-[var(--border)] bg-[var(--background)] p-4">
-            <p className="font-medium text-[var(--foreground)]">{linkToDeactivate.description || linkToDeactivate.id}</p>
-            <p className="mt-1 text-sm text-[var(--muted-foreground)]">
-              {linkToDeactivate.url}
-            </p>
-          </div>
-        )}
-      </Modal>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

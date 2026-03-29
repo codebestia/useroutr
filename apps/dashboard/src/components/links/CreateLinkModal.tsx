@@ -1,9 +1,21 @@
 "use client";
 
 import { useState } from "react";
-import { Modal, Button, Input } from "@tavvio/ui";
-import { CurrencyInput } from "@tavvio/ui";
-import { DatePicker } from "@tavvio/ui";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  Button,
+  Input,
+  Switch,
+  Label,
+  Separator,
+  CurrencyInput,
+  DatePicker,
+} from "@tavvio/ui";
 import type { CreatePaymentLinkInput } from "@tavvio/types";
 
 interface CreateLinkModalProps {
@@ -65,13 +77,109 @@ export function CreateLinkModal({
   };
 
   return (
-    <Modal
-      open={open}
-      onOpenChange={handleOpenChange}
-      title="New Payment Link"
-      description="Configure your payment link settings"
-      footer={
-        <div className="flex justify-end gap-2">
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="sm:max-w-[480px]">
+        <DialogHeader>
+          <DialogTitle>New Payment Link</DialogTitle>
+          <DialogDescription>
+            Configure your payment link settings
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-5 max-h-[60vh] overflow-y-auto py-1">
+          {/* Amount Type */}
+          <div className="space-y-3">
+            <Label>Amount</Label>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="amountType"
+                  checked={amountType === "fixed"}
+                  onChange={() => setAmountType("fixed")}
+                  className="h-4 w-4 accent-[var(--primary)]"
+                />
+                <span className="text-sm text-[var(--foreground)]">Fixed amount</span>
+              </label>
+              {amountType === "fixed" && (
+                <div className="pl-6">
+                  <CurrencyInput
+                    value={amount?.toString() || ""}
+                    currency={currency}
+                    onCurrencyChange={setCurrency}
+                    onAmountChange={(val) => setAmount(val ? parseFloat(val) : undefined)}
+                    placeholder="0.00"
+                  />
+                </div>
+              )}
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="amountType"
+                  checked={amountType === "open"}
+                  onChange={() => setAmountType("open")}
+                  className="h-4 w-4 accent-[var(--primary)]"
+                />
+                <span className="text-sm text-[var(--foreground)]">
+                  Open amount (payer decides)
+                </span>
+              </label>
+            </div>
+          </div>
+
+          {/* Description */}
+          <Input
+            label="Description (optional)"
+            placeholder="e.g., Design consultation - 1hr"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+
+          <Separator />
+
+          {/* Options */}
+          <div className="space-y-4">
+            <Label>Options</Label>
+
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="single-use" className="cursor-pointer">Single-use</Label>
+                <p className="text-xs text-[var(--muted-foreground)]">
+                  Accept only one payment
+                </p>
+              </div>
+              <Switch
+                id="single-use"
+                checked={isSingleUse}
+                onCheckedChange={setIsSingleUse}
+              />
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="has-expiry" className="cursor-pointer">Set expiry date</Label>
+                <p className="text-xs text-[var(--muted-foreground)]">
+                  Link will expire after this date
+                </p>
+              </div>
+              <Switch
+                id="has-expiry"
+                checked={hasExpiry}
+                onCheckedChange={setHasExpiry}
+              />
+            </div>
+
+            {hasExpiry && (
+              <DatePicker
+                value={expiryDate}
+                onChange={(e) => setExpiryDate(e.target.value)}
+                min={new Date().toISOString().split("T")[0]}
+              />
+            )}
+          </div>
+        </div>
+
+        <DialogFooter>
           <Button type="button" variant="outline" onClick={() => handleOpenChange(false)}>
             Cancel
           </Button>
@@ -83,95 +191,8 @@ export function CreateLinkModal({
           >
             Create Link
           </Button>
-        </div>
-      }
-    >
-      <div className="space-y-5">
-        {/* Amount Type */}
-        <div className="space-y-3">
-          <label className="text-sm font-medium text-[var(--foreground)]">Amount</label>
-          <div className="space-y-2">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="radio"
-                name="amountType"
-                checked={amountType === "fixed"}
-                onChange={() => setAmountType("fixed")}
-                className="h-4 w-4 accent-[var(--primary)]"
-              />
-              <span className="text-sm text-[var(--foreground)]">Fixed amount</span>
-            </label>
-            {amountType === "fixed" && (
-              <div className="pl-6">
-                <CurrencyInput
-                  value={amount?.toString() || ""}
-                  currency={currency}
-                  onCurrencyChange={setCurrency}
-                  onAmountChange={(val) => setAmount(val ? parseFloat(val) : undefined)}
-                  placeholder="0.00"
-                />
-              </div>
-            )}
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="radio"
-                name="amountType"
-                checked={amountType === "open"}
-                onChange={() => setAmountType("open")}
-                className="h-4 w-4 accent-[var(--primary)]"
-              />
-              <span className="text-sm text-[var(--foreground)]">
-                Open amount (payer decides)
-              </span>
-            </label>
-          </div>
-        </div>
-
-        {/* Description */}
-        <Input
-          label="Description (optional)"
-          placeholder="e.g., Design consultation - 1hr"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-        />
-
-        {/* Options */}
-        <div className="space-y-4">
-          <label className="text-sm font-medium text-[var(--foreground)]">Options</label>
-          
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={isSingleUse}
-              onChange={(e) => setIsSingleUse(e.target.checked)}
-              className="h-4 w-4 rounded accent-[var(--primary)]"
-            />
-            <span className="text-sm text-[var(--foreground)]">
-              Single-use (one payment only)
-            </span>
-          </label>
-
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={hasExpiry}
-              onChange={(e) => setHasExpiry(e.target.checked)}
-              className="h-4 w-4 rounded accent-[var(--primary)]"
-            />
-            <span className="text-sm text-[var(--foreground)]">Set expiry date</span>
-          </label>
-
-          {hasExpiry && (
-            <div className="pl-6">
-              <DatePicker
-                value={expiryDate}
-                onChange={(e) => setExpiryDate(e.target.value)}
-                min={new Date().toISOString().split("T")[0]}
-              />
-            </div>
-          )}
-        </div>
-      </div>
-    </Modal>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
