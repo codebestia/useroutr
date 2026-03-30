@@ -23,8 +23,8 @@ async function main() {
         envContent = fs.readFileSync(envPath, "utf-8");
     }
 
-    const envVarRegex = new RegExp(`^HTLC_EVM_ADDRESS_${network.name.toUpperCase().replace("-", "_")}=.*$`, "m");
-    const newEnvVar = `HTLC_EVM_ADDRESS_${network.name.toUpperCase().replace("-", "_")}=${htlcAddress}`;
+    const envVarRegex = new RegExp(`^HTLC_EVM_ADDRESS_${network.name.toUpperCase().replaceAll("-", "_")}=.*$`, "m");
+    const newEnvVar = `HTLC_EVM_ADDRESS_${network.name.toUpperCase().replaceAll("-", "_")}=${htlcAddress}`;
 
     if (envVarRegex.test(envContent)) {
         envContent = envContent.replace(envVarRegex, newEnvVar);

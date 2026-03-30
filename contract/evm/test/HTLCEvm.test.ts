@@ -5,8 +5,8 @@ import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
 import { Contract } from "ethers";
 
-const createHashlock = (secret: string) => {
-    return ethers.sha256(ethers.toUtf8Bytes(secret));
+const createHashlock = (preimage: string) => {
+    return ethers.sha256(preimage);
 };
 
 describe("HTLCEvm", function () {
@@ -18,7 +18,8 @@ describe("HTLCEvm", function () {
 
     const amount = ethers.parseUnits("100", 18);
     const secret = "my_super_secret_preimage";
-    const hashlock = createHashlock(secret);
+    const bytes32Preimage = ethers.encodeBytes32String(secret);
+    const hashlock = createHashlock(bytes32Preimage);
     let lockId: string;
     let timelock: number;
 
@@ -61,19 +62,16 @@ describe("HTLCEvm", function () {
             );
 
             const receipt = await tx.wait();
+            if (!receipt) throw new Error("No receipt");
 
-            const eventInfo = receipt?.logs.find((e: any) => e.fragment?.name === "Locked");
-            expect(eventInfo).to.not.be.undefined;
+            const event = htlc.interface.parseLog(receipt.logs[1] as any);
+            expect(event?.name).to.equal("Locked");
+            
+            lockId = event?.args[0];
 
-            // @ts-ignore
-            lockId = eventInfo?.args[0];
-
-            // @ts-ignore
-            expect(eventInfo?.args[1]).to.equal(sender.address);
-            // @ts-ignore
-            expect(eventInfo?.args[2]).to.equal(receiver.address);
-            // @ts-ignore
-            expect(eventInfo?.args[3]).to.equal(amount);
+            expect(event?.args[1]).to.equal(sender.address);
+            expect(event?.args[2]).to.equal(receiver.address);
+            expect(event?.args[3]).to.equal(amount);
 
             const senderFinalBal = await token.getFunction("balanceOf")(sender.address);
             const htlcFinalBal = await token.getFunction("balanceOf")(htlcAddress);
@@ -119,10 +117,9 @@ describe("HTLCEvm", function () {
                 timelock
             );
             const receipt = await tx.wait();
-            const eventInfo = receipt?.logs.find((e: any) => e.fragment?.name === "Locked");
-
-            // @ts-ignore
-            currentLockId = eventInfo?.args[0];
+            if (!receipt) throw new Error("No receipt");
+            const event = htlc.interface.parseLog(receipt.logs[1] as any);
+            currentLockId = event?.args[0];
         });
 
         it("withdraw() with correct preimage: Reveal secret, verify receiver gets tokens", async function () {
@@ -139,9 +136,9 @@ describe("HTLCEvm", function () {
                 timelock + 100
             );
             const receipt = await tx.wait();
-
-            // @ts-ignore
-            const newLockId = receipt?.logs.find((e: any) => e.fragment?.name === "Locked")?.args[0];
+            if (!receipt) throw new Error("No receipt");
+            const event = htlc.interface.parseLog(receipt.logs[1] as any);
+            const newLockId = event?.args[0];
 
             await expect(htlc.connect(receiver).withdraw(newLockId, bytes32Preimage))
                 .to.emit(htlc, "Withdrawn")

@@ -37,7 +37,14 @@ const config: HardhatUserConfig = {
         },
     },
     etherscan: {
-        apiKey: process.env.ETHERSCAN_API_KEY || process.env.BASESCAN_API_KEY || "",
+        apiKey: {
+            sepolia: process.env.ETHERSCAN_API_KEY || "",
+            baseSepolia: process.env.BASESCAN_API_KEY || "",
+            bscTestnet: process.env.BSCSCAN_API_KEY || "",
+            polygonAmoy: process.env.POLYGONSCAN_API_KEY || "",
+            arbitrumSepolia: process.env.ARBISCAN_API_KEY || "",
+            avalancheFujiTestnet: process.env.SNOWTRACE_API_KEY || "",
+        },
     },
     sourcify: {
         enabled: false
