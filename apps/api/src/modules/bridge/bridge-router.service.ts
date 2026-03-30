@@ -146,6 +146,15 @@ export class BridgeRouterService {
     return `tx_hash_for_unlocking_${lockId}_on_${chain}`;
   }
 
+  async refundSourceLock(params: {
+    chain: any;
+    lockId: string;
+  }): Promise<string> {
+    const { chain, lockId } = params;
+    // Implementation would call refund() on EVM HTLC contract
+    return `tx_hash_for_refunding_${lockId}_on_${chain}`;
+  }
+
   private stellarDirectTransfer(params: BridgeOutParams): BridgeOutResult {
     void params;
     // Direct Stellar path payment — no bridge needed

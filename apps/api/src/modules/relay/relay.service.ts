@@ -7,12 +7,16 @@ import Redis from 'ioredis';
 import { StellarService } from '../stellar/stellar.service';
 import { PaymentsService } from '../payments/payments.service';
 import { BridgeRouterService } from '../bridge/bridge-router.service';
-import { Chain } from '@tavvio/types';
+import { Chain, SourceLockEvent } from '@tavvio/types';
 import { PaymentStatus } from '../../generated/prisma';
 
 @Injectable()
 export class RelayService implements OnModuleInit {
   private readonly logger = new Logger(RelayService.name);
+  private readonly DEFAULT_BACKOFF = {
+    type: 'exponential',
+    delay: 1000,
+  };
 
   constructor(
     @InjectQueue('relay') private readonly relayQueue: Queue,
@@ -27,138 +31,237 @@ export class RelayService implements OnModuleInit {
     return block ? parseInt(block, 10) : 0;
   }
 
-  private async setProcessedBlock(chain: string, blockAt: number): Promise<void> {
+  private async setProcessedBlock(
+    chain: string,
+    blockAt: number,
+  ): Promise<void> {
     await this.redis.set(`last_processed_block:${chain}`, blockAt.toString());
   }
 
   async onModuleInit() {
     this.logger.log('RelayService initializing...');
-    
+
     // Watch Stellar HTLC events
     this.watchStellarHTLC();
 
     // Start watching supported EVM chains
-    const evmChains: Chain[] = ['ethereum', 'base', 'polygon', 'arbitrum', 'avalanche'];
+    const evmChains: Chain[] = [
+      'ethereum',
+      'base',
+      'polygon',
+      'arbitrum',
+      'avalanche',
+    ];
     for (const chain of evmChains) {
-        this.watchSourceChain(chain);
+      this.watchSourceChain(chain);
     }
 
     // Schedule expired lock watchdog every 60s
-    await this.relayQueue.add('watchExpired', {}, { repeat: { every: 60_000 } });
+    await this.relayQueue.add(
+      'watchExpired',
+      {},
+      {
+        repeat: { every: 60_000 },
+        jobId: 'watchExpired',
+      },
+    );
   }
 
-  // Watch Soroban HTLC contract for "withdrawn" events
   private async watchStellarHTLC(): Promise<void> {
     const htlcContractId = process.env.STELLAR_HTLC_CONTRACT_ID || '';
     if (!htlcContractId) {
-        this.logger.warn('STELLAR_HTLC_CONTRACT_ID not set, skipping Stellar watcher');
-        return;
+      this.logger.warn(
+        'STELLAR_HTLC_CONTRACT_ID not set, skipping Stellar watcher',
+      );
+      return;
     }
 
     this.stellarService.streamContractEvents(htlcContractId, async (event) => {
-        // Event structure from Soroban
-        if (event.type === 'Withdrawn') {
-            await this.handleStellarWithdrawal({
-                lockId: event.lock_id,
-                preimage: event.preimage
-            });
-        }
+      if (event.type === 'Withdrawn') {
+        await this.handleStellarWithdrawal({
+          lockId: event.lock_id,
+          preimage: event.preimage,
+        });
+      }
     });
   }
 
-  // When secret is revealed on Stellar, use it on source chain
-  private async handleStellarWithdrawal(event: { lockId: string; preimage: string }): Promise<void> {
+  // Detected on-chain secret reveal
+  private async handleStellarWithdrawal(event: {
+    lockId: string;
+    preimage: string;
+  }): Promise<void> {
     this.logger.log(`Detected Stellar withdrawal for lock ${event.lockId}`);
-    
-    const payment = await this.paymentsService.findByStellarLockId(event.lockId);
+
+    const payment = await this.paymentsService.findByStellarLockId(
+      event.lockId,
+    );
     if (!payment) {
-        this.logger.warn(`No payment found for Stellar lock ${event.lockId}`);
-        return;
+      this.logger.warn(`No payment found for Stellar lock ${event.lockId}`);
+      return;
     }
 
-    await this.relayQueue.add('completeSourceUnlock', {
+    // Already completed?
+    if (payment.status === PaymentStatus.COMPLETED) return;
+
+    await this.relayQueue.add(
+      'completeSourceUnlock',
+      {
         paymentId: payment.id,
-        preimage: event.preimage
-    });
+        preimage: event.preimage,
+      },
+      {
+        attempts: 10,
+        backoff: this.DEFAULT_BACKOFF,
+      },
+    );
   }
 
-  // Watch source chain (EVM) for "Locked" events
   private async watchSourceChain(chain: Chain): Promise<void> {
-    // In a real scenario, these would come from config/env
     const rpcUrl = process.env[`RPC_URL_${chain.toUpperCase()}`];
     const htlcAddress = process.env[`HTLC_ADDRESS_${chain.toUpperCase()}`];
-    
+
     if (!rpcUrl || !htlcAddress) {
-        this.logger.debug(`RPC or HTLC address missing for ${chain}, skipping watcher`);
-        return;
+      this.logger.debug(
+        `RPC or HTLC address missing for ${chain}, skipping watcher`,
+      );
+      return;
     }
 
     this.logger.log(`Watching EVM chain: ${chain} at ${htlcAddress}`);
 
     try {
-        const provider = new ethers.JsonRpcProvider(rpcUrl);
-        const htlc = new ethers.Contract(htlcAddress, [
-            "event Locked(bytes32 indexed lockId, address indexed sender, address indexed receiver, uint256 amount, bytes32 hashlock, uint256 timelock, address token)"
-        ], provider);
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      const htlc = new ethers.Contract(
+        htlcAddress,
+        [
+          'event Locked(bytes32 indexed lockId, address indexed sender, address indexed receiver, uint256 amount, bytes32 hashlock, uint256 timelock, address token)',
+        ],
+        provider,
+      );
 
-        // Fault tolerance: scan from last processed block
-        const lastBlock = await this.getProcessedBlock(chain);
-        const currentBlock = await provider.getBlockNumber();
-        
-        if (lastBlock > 0 && lastBlock < currentBlock) {
-            this.logger.log(`Scanning ${chain} for missed events from block ${lastBlock} to ${currentBlock}`);
-            const query = htlc.filters.Locked();
-            const events = await htlc.queryFilter(query, lastBlock + 1, currentBlock);
-            
-            for (const event of events) {
-                if ('args' in event && event.args) {
-                    const [lockId, sender, receiver, amount, hashlock, timelock, token] = event.args;
-                    await this.handleSourceLock({
-                        lockId, sender, receiver, amount, hashlock,
-                        timelock: Number(timelock), token, chain
-                    });
-                }
-            }
-        }
-        await this.setProcessedBlock(chain, currentBlock);
+      const lastBlock = await this.getProcessedBlock(chain);
+      const currentBlock = await provider.getBlockNumber();
 
-        htlc.on('Locked', async (lockId, sender, receiver, amount, hashlock, timelock, token, event) => {
+      if (lastBlock > 0 && lastBlock < currentBlock) {
+        this.logger.log(
+          `Scanning ${chain} for missed events from block ${lastBlock} to ${currentBlock}`,
+        );
+        const query = htlc.filters.Locked();
+        const events = await htlc.queryFilter(
+          query,
+          lastBlock + 1,
+          currentBlock,
+        );
+
+        for (const event of events as any[]) {
+          if (event.args) {
+            const [
+              lockId,
+              sender,
+              receiver,
+              amount,
+              hashlock,
+              timelock,
+              token,
+            ] = event.args;
             await this.handleSourceLock({
-                lockId, sender, receiver, amount, hashlock,
-                timelock: Number(timelock), token, chain
+              lockId,
+              sender,
+              receiver,
+              amount,
+              hashlock,
+              timelock: Number(timelock),
+              token,
+              chain,
             });
-            await this.setProcessedBlock(chain, event.log.blockNumber);
-        });
+          }
+        }
+      }
+      await this.setProcessedBlock(chain, currentBlock);
+
+      htlc.on(
+        'Locked',
+        async (
+          lockId,
+          sender,
+          receiver,
+          amount,
+          hashlock,
+          timelock,
+          token,
+          event,
+        ) => {
+          await this.handleSourceLock({
+            lockId,
+            sender,
+            receiver,
+            amount,
+            hashlock,
+            timelock: Number(timelock),
+            token,
+            chain,
+          });
+          await this.setProcessedBlock(chain, event.log.blockNumber);
+        },
+      );
     } catch (err) {
-        this.logger.error(`Failed to watch ${chain}: ${err.message}`);
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Failed to watch ${chain}: ${message}`);
     }
   }
 
-  // When payer locks funds on source chain, trigger Stellar side
-  private async handleSourceLock(event: any): Promise<void> {
+  private async handleSourceLock(event: SourceLockEvent): Promise<void> {
     this.logger.log(`Detected source lock: ${event.lockId} on ${event.chain}`);
-    
-    // Idempotency: match and update status
+
     const payment = await this.paymentsService.handleSourceLock(event);
     if (payment) {
-        await this.relayQueue.add('completeStellarLock', { paymentId: payment.id });
+      await this.relayQueue.add(
+        'completeStellarLock',
+        { paymentId: payment.id },
+        {
+          attempts: 10,
+          backoff: this.DEFAULT_BACKOFF,
+        },
+      );
     }
   }
 
-  // Watchdog: refund expired Stellar locks
   async processExpiredLocks(): Promise<void> {
     this.logger.log('Checking for expired locks...');
-    const expiredPayments = await this.paymentsService.findExpiredPayments();
-    
+    // findExpiredPending identified payments that timed out in PENDING status
+    // but here we need to find payments that are locked but never completed
+    const expiredPayments = await this.paymentsService.findExpiredLocked();
+
     for (const payment of expiredPayments) {
-        this.logger.log(`Refunding expired payment: ${payment.id}`);
-        
-        if (payment.stellarLockId) {
-            await this.stellarService.refundHTLC(payment.stellarLockId);
+      this.logger.log(`Refunding expired payment: ${payment.id}`);
+
+      // 1. Refund Stellar side
+      if (payment.stellarLockId) {
+        try {
+          await this.stellarService.refundHTLC(payment.stellarLockId);
+        } catch (err) {
+          this.logger.error(
+            `Failed to refund Stellar lock ${payment.stellarLockId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
-        
-        // Update status to REFUNDED
-        await this.paymentsService.updateStatus(payment.id, PaymentStatus.REFUNDED);
+      }
+
+      // 2. Refund Source side (EVM)
+      if (payment.sourceLockId) {
+        try {
+          await this.bridgeRouter.refundSourceLock({
+            chain: payment.sourceChain as any,
+            lockId: payment.sourceLockId,
+          });
+        } catch (err) {
+          this.logger.error(
+            `Failed to refund Source lock ${payment.sourceLockId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+
+      await this.paymentsService.updateStatus(payment.id, PaymentStatus.FAILED);
     }
   }
 }

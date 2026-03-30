@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import * as StellarSdk from '@stellar/stellar-sdk';
 
 @Injectable()
 export class StellarService {
@@ -8,7 +7,7 @@ export class StellarService {
   // We'll use a real stream in the full implementation
   streamContractEvents(contractId: string, onEvent: (event: any) => void) {
     this.logger.log(`Starting soroban event stream for ${contractId}`);
-    // This would typically use StellarSdk.rpc.Server.getEvents
+    // This would typically use the @stellar/stellar-sdk rpc module
   }
 
   async lockHTLC(params: {

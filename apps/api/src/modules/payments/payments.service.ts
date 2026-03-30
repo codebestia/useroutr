@@ -1,7 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { PaymentStatus } from '../../generated/prisma';
+import { PaymentStatus, Payment } from '../../generated/prisma';
 import { EventsGateway } from '../events/events/events.gateway';
+import { SourceLockEvent } from '@tavvio/types';
 
 @Injectable()
 export class PaymentsService {
@@ -12,19 +13,24 @@ export class PaymentsService {
     private readonly eventsGateway: EventsGateway,
   ) {}
 
-  async handleSourceLock(event: {
-    lockId: string;
-    sender: string;
-    receiver: string;
-    amount: bigint;
-    hashlock: string;
-    timelock: number;
-    token: string;
-    chain: string;
-  }) {
+  async getById(id: string): Promise<Payment> {
+    const payment = await this.prisma.payment.findUnique({
+      where: { id },
+    });
+    if (!payment) throw new NotFoundException(`Payment ${id} not found`);
+    return payment as any;
+  }
+
+  // Backwards compat
+  async findById(id: string): Promise<Payment | null> {
+    return this.prisma.payment.findUnique({ where: { id } }) as any;
+  }
+
+  async handleSourceLock(event: SourceLockEvent): Promise<Payment | null> {
     this.logger.log(`Handling source lock: ${event.lockId} on ${event.chain}`);
 
-    // Match hashlock to a pending payment
+    // Match hashlock to a pending payment. We use hashlock as the unique identifier
+    // for this swap across chains before it's properly linked.
     const payment = await this.prisma.payment.findFirst({
       where: {
         hashlock: event.hashlock,
@@ -33,37 +39,47 @@ export class PaymentsService {
     });
 
     if (!payment) {
-      this.logger.warn(`No pending payment found for hashlock: ${event.hashlock}`);
-      return;
+      this.logger.warn(
+        `No pending payment found for hashlock: ${event.hashlock}`,
+      );
+      return null;
     }
 
     // Update payment with source lock info
+    const expiresAt = new Date(event.timelock * 1000);
     const updatedPayment = await this.prisma.payment.update({
       where: { id: payment.id },
       data: {
         sourceLockId: event.lockId,
         sourceAddress: event.sender,
         status: PaymentStatus.SOURCE_LOCKED,
+        expiresAt,
       },
     });
 
-    // Emit real-time update
-    this.eventsGateway.server.to(payment.id).emit('payment.updated', updatedPayment);
+    if (this.eventsGateway.server) {
+      this.eventsGateway.server
+        .to(payment.id)
+        .emit('payment.updated', updatedPayment);
+    }
 
-    return updatedPayment;
+    return updatedPayment as any;
   }
 
-  async updateStatus(id: string, status: PaymentStatus, txHash?: string) {
+  async updateStatus(
+    id: string,
+    status: PaymentStatus,
+    extra: Partial<Payment> = {},
+  ): Promise<Payment> {
     this.logger.log(`Updating payment ${id} status to ${status}`);
-    
-    const data: any = { status };
-    if (txHash) {
-      if (status === PaymentStatus.STELLAR_LOCKED) {
-        data.stellarTxHash = txHash;
-      } else if (status === PaymentStatus.COMPLETED) {
-        data.destTxHash = txHash;
-        data.completedAt = new Date();
-      }
+
+    const data: any = {
+      status,
+      ...extra,
+    };
+
+    if (status === PaymentStatus.COMPLETED) {
+      data.completedAt = new Date();
     }
 
     const updatedPayment = await this.prisma.payment.update({
@@ -71,37 +87,35 @@ export class PaymentsService {
       data,
     });
 
-    this.eventsGateway.server.to(id).emit('payment.updated', updatedPayment);
-    return updatedPayment;
+    if (this.eventsGateway.server) {
+      this.eventsGateway.server.to(id).emit('payment.updated', updatedPayment);
+    }
+
+    return updatedPayment as any;
   }
 
-  async findByStellarLockId(stellarLockId: string) {
+  async findByStellarLockId(stellarLockId: string): Promise<Payment | null> {
     return this.prisma.payment.findFirst({
       where: { stellarLockId },
-    });
+    }) as any;
   }
 
-  async findById(id: string) {
-    return this.prisma.payment.findUnique({
-      where: { id },
-    });
-  }
-
-  async findExpiredPayments() {
+  async findExpiredLocked(): Promise<Payment[]> {
     const now = new Date();
-    // Simplified: finding payments in LOCKED status that should be expired
-    // In a real app, we'd check the timelock from the contract or stored metadata
     return this.prisma.payment.findMany({
       where: {
         status: {
           in: [PaymentStatus.SOURCE_LOCKED, PaymentStatus.STELLAR_LOCKED],
         },
-        // For simplicity, we assume payments older than 1 hour are expired if not completed
-        // A better way would be to store the actual timelock timestamp
-        createdAt: {
-          lt: new Date(now.getTime() - 3600 * 1000),
-        },
+        OR: [
+          { expiresAt: { lt: now } },
+          // Heuristic if expiresAt is somehow missing
+          {
+            expiresAt: null,
+            createdAt: { lt: new Date(now.getTime() - 2 * 3600 * 1000) },
+          },
+        ],
       },
-    });
+    }) as any;
   }
 }
